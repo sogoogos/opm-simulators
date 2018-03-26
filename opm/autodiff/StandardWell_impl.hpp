@@ -481,7 +481,7 @@ namespace Opm
                 volumeRatio += cmix_s[contiSolventEqIdx] / b_perfcells_dense[contiSolventEqIdx];
             }
 
-            if (FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx) && FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
+            if (well_type_ == PRODUCER && FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx) && FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
                 const unsigned oilCompIdx = Indices::canonicalToActiveComponentIndex(FluidSystem::oilCompIdx);
                 const unsigned gasCompIdx = Indices::canonicalToActiveComponentIndex(FluidSystem::gasCompIdx);
                 // Incorporate RS/RV factors if both oil and gas active
@@ -632,6 +632,79 @@ namespace Opm
                     well_state.perfRateSolvent()[first_perf_ + perf] = cq_s[componentIdx].value();
                 } else {
                     well_state.perfPhaseRates()[(first_perf_ + perf) * np + ebosCompIdxToFlowCompIdx(componentIdx)] = cq_s[componentIdx].value();
+                }
+            }
+            if (GET_PROP_VALUE(TypeTag, EnableEnergy)) {
+
+                auto fs = intQuants.fluidState();
+                int reportStepIdx = ebosSimulator.episodeIndex();
+
+                for (unsigned phaseIdx = 0; phaseIdx < FluidSystem::numPhases; ++phaseIdx) {
+                    if (!FluidSystem::phaseIsActive(phaseIdx)) {
+                        continue;
+                    }
+
+                    const unsigned activeCompIdx = Indices::canonicalToActiveComponentIndex(FluidSystem::solventComponentIndex(phaseIdx));
+                    EvalWell cq_r_thermal = 0.0;
+                    if (well_type_ == INJECTOR){
+                        const auto& injProps = this->well_ecl_->getInjectionProperties(reportStepIdx);
+#warning HACK
+                        if( FluidSystem::waterPhaseIdx != phaseIdx )
+                            continue;
+
+                        assert (injProps.injectorType == WellInjector::WATER);
+
+                        fs.setTemperature(injProps.temperature);
+
+                        typedef typename std::decay<decltype(fs)>::type::Scalar FsScalar;
+                        typename FluidSystem::template ParameterCache<FsScalar> paramCache;
+                        unsigned pvtRegionIdx = intQuants.pvtRegionIndex();
+                        paramCache.setRegionIndex(pvtRegionIdx);
+                        paramCache.setMaxOilSat(ebosSimulator.problem().maxOilSaturation(cell_idx));
+                        paramCache.updatePhase(fs, phaseIdx);
+
+                        //const auto& rho = FluidSystem::density(fs, paramCache, phaseIdx);
+                        //fs.setDensity(phaseIdx, rho);
+
+                        const auto& h = FluidSystem::enthalpy(fs, paramCache, phaseIdx);
+                        fs.setEnthalpy(phaseIdx, h);
+                        cq_r_thermal = cq_s[activeCompIdx] / extendEval(fs.invB(phaseIdx));
+
+                    } else if (well_type_ == PRODUCER) {
+                        if (FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx) && FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
+                            const unsigned oilCompIdx = Indices::canonicalToActiveComponentIndex(FluidSystem::oilCompIdx);
+                            const unsigned gasCompIdx = Indices::canonicalToActiveComponentIndex(FluidSystem::gasCompIdx);
+                            // q_os = q_or * b_o + rv * q_gr * b_g
+                            // q_gs = q_gr * g_g + rs * q_or * b_o
+                            // d = 1.0 - rs * rv
+                            EvalWell d = extendEval(1.0 - fs.Rv() * fs.Rs());
+                            // q_gr = 1 / (b_g * d) * (q_gs - rs * q_os)
+                            if(FluidSystem::gasPhaseIdx == phaseIdx)
+                                cq_r_thermal = (cq_s[gasCompIdx] - extendEval(fs.Rs()) * cq_s[oilCompIdx]) / (d * extendEval(fs.invB(phaseIdx)) );
+                            // dissolved of gas in oil
+                            // q_or = 1 / (b_o * d) * (q_os - rv * q_gs)
+                            if(FluidSystem::oilPhaseIdx == phaseIdx)
+                                cq_r_thermal = (cq_s[oilCompIdx] - extendEval(fs.Rv()) * cq_s[gasCompIdx]) / (d * extendEval(fs.invB(phaseIdx)) );
+
+                        } else {
+                            cq_r_thermal = cq_s[activeCompIdx] / extendEval(fs.invB(phaseIdx));
+                        }
+                    }
+
+                    cq_r_thermal *= extendEval(fs.enthalpy(phaseIdx)) * extendEval(fs.density(phaseIdx));
+		    // scale the flux by the scaling factor for the energy equation
+                    cq_r_thermal *= GET_PROP_VALUE(TypeTag, BlackOilEnergyScalingFactor);
+
+                    if (!only_wells) {
+                        for (int pvIdx = 0; pvIdx < numEq; ++pvIdx) {
+                            //std::cout << ebosJac[cell_idx][cell_idx][contiEnergyEqIdx][pvIdx] << std::endl;
+                            ebosJac[cell_idx][cell_idx][contiEnergyEqIdx][pvIdx] -= cq_r_thermal.derivative(pvIdx);
+                            //std::cout << ebosJac[cell_idx][cell_idx][contiEnergyEqIdx][pvIdx] << std::endl;
+                        }
+                        //std::cout << ebosResid[cell_idx][contiEnergyEqIdx] << std::endl;
+                        ebosResid[cell_idx][contiEnergyEqIdx] -= cq_r_thermal.value();
+                        //std::cout << ebosResid[cell_idx][contiEnergyEqIdx] << std::endl;
+                    }
                 }
             }
 
