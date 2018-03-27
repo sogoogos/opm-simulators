@@ -898,7 +898,8 @@ namespace Opm {
                     maxCoeff[ contiPolymerEqIdx ] = std::max( maxCoeff[ contiPolymerEqIdx ], std::abs( R2 ) / pvValue );
                 }
                 if (has_energy_ ) {
-                    B_avg[ contiEnergyEqIdx ] += 1.0;
+                    // scale the residual with the energy required to heat up 1 kg of water by 30 Kelvin.
+                    B_avg[ contiEnergyEqIdx ] += 1.0 / (30*4184.0*GET_PROP_VALUE(TypeTag, BlackOilEnergyScalingFactor)*1000);
                     const auto R2 = ebosResid[cell_idx][contiEnergyEqIdx];
                     R_sum[ contiEnergyEqIdx ] += R2;
                     maxCoeff[ contiEnergyEqIdx ] = std::max( maxCoeff[ contiEnergyEqIdx ], std::abs( R2 ) / pvValue );
