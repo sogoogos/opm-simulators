@@ -689,7 +689,8 @@ namespace Opm
                     }
                     cq_r_thermal *= extendEval(fs.enthalpy(phaseIdx)) * extendEval(fs.density(phaseIdx));
 		    // scale the flux by the scaling factor for the energy equation
-                    cq_r_thermal *= GET_PROP_VALUE(TypeTag, BlackOilEnergyScalingFactor);
+                    static constexpr Scalar alpha = GET_PROP_VALUE(TypeTag, BlackOilEnergyScalingFactor);
+                    cq_r_thermal *= alpha;
 
                     if (!only_wells) {
                         for (int pvIdx = 0; pvIdx < numEq; ++pvIdx) {
