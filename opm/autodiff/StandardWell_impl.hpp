@@ -331,7 +331,7 @@ namespace Opm
             return primary_variables_evaluation_[GFrac];
         }
 
-        if (has_solvent && compIdx == contiSolventEqIdx) {
+        if (has_solvent && static_cast<int>(compIdx) == contiSolventEqIdx) {
             return primary_variables_evaluation_[SFrac];
         }
 
