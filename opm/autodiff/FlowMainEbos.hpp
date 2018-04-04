@@ -425,6 +425,10 @@ namespace Opm
             ebosSimulator_->model().applyInitialSolution();
 
             try {
+                if (deck().hasKeyword("TEMP")) {
+                    std::cout << "Specified the TEMP keyword for a thermal run, using full energy conservation instead (THERMAL).\n";
+                }
+
                 if (output_cout_) {
                     MissingFeatures::checkKeywords(deck());
                 }
