@@ -188,17 +188,8 @@ public:
         SimulatorReport report;
         SimulatorReport stepReport;
 
-        WellModel wellModel(ebosSimulator_, modelParam_, terminalOutput_);
         if (isRestart()) {
-            wellModel.initFromRestartFile(*restartValues);
-        }
-
-        if (modelParam_.matrix_add_well_contributions_ ||
-             modelParam_.preconditioner_add_well_contributions_)
-        {
-            ebosSimulator_.model().clearAuxiliaryModules();
-            wellAuxMod_.reset(new WellConnectionAuxiliaryModule<TypeTag>(schedule(), grid()));
-            ebosSimulator_.model().addAuxiliaryModule(wellAuxMod_.get());
+            wellModel_().initFromRestartFile(*restartValues);
         }
 
         AquiferModel aquifer_model(ebosSimulator_);
@@ -215,9 +206,7 @@ public:
             // Run a multiple steps of the solver depending on the time step control.
             solverTimer.start();
 
-            wellModel.beginReportStep(timer.currentStepNum());
-
-            auto solver = createSolver(wellModel, aquifer_model);
+            auto solver = createSolver(wellModel_(), aquifer_model);
 
             // write the inital state at the report stage
             if (timer.initialStep()) {
@@ -226,12 +215,7 @@ public:
 
                 // No per cell data is written for initial step, but will be
                 // for subsequent steps, when we have started simulating
-                auto localWellData = wellModel.wellState().report(phaseUsage_, Opm::UgGridHelpers::globalCell(grid()));
-                ebosSimulator_.problem().writeOutput(localWellData,
-                                                     timer.simulationTimeElapsed(),
-                                                     /*isSubstep=*/false,
-                                                     totalTimer.secsSinceStart(),
-                                                     /*nextStepSize=*/-1.0);
+                ebosSimulator_.problem().writeOutput(false);
 
                 report.output_write_time += perfTimer.stop();
             }
@@ -284,7 +268,6 @@ public:
             }
 
             solver->model().endReportStep();
-            wellModel.endReportStep();
 
             // take time that was used to solve system for this reportStep
             solverTimer.stop();
@@ -307,13 +290,8 @@ public:
             Dune::Timer perfTimer;
             perfTimer.start();
             const double nextstep = adaptiveTimeStepping ? adaptiveTimeStepping->suggestedNextStep() : -1.0;
-
-            auto localWellData = wellModel.wellState().report(phaseUsage_, Opm::UgGridHelpers::globalCell(grid()));
-            ebosSimulator_.problem().writeOutput(localWellData,
-                                                 timer.simulationTimeElapsed(),
-                                                 /*isSubstep=*/false,
-                                                 totalTimer.secsSinceStart(),
-                                                 nextstep);
+            ebosSimulator_.problem().setNextTimeStepSize(nextstep);
+            ebosSimulator_.problem().writeOutput(false);
             report.output_write_time += perfTimer.stop();
 
             if (terminalOutput_) {
@@ -381,6 +359,12 @@ protected:
         const auto& initconfig = eclState().getInitConfig();
         return initconfig.restartRequested();
     }
+
+    WellModel& wellModel_()
+    { return ebosSimulator_.problem().wellModel(); }
+
+    const WellModel& wellModel_() const
+    { return ebosSimulator_.problem().wellModel(); }
 
     // Data.
     Simulator& ebosSimulator_;

@@ -782,7 +782,7 @@ namespace Opm
     void
     WellInterface<TypeTag>::
     computeRepRadiusPerfLength(const Grid& grid,
-                               const std::map<int, int>& cartesian_to_compressed)
+                               const std::vector<int>& cartesian_to_compressed)
     {
         const int* cart_dims = Opm::UgGridHelpers::cartDims(grid);
         auto cell_to_faces = Opm::UgGridHelpers::cell2Faces(grid);
@@ -809,12 +809,12 @@ namespace Opm
 
                 const int* cpgdim = cart_dims;
                 const int cart_grid_indx = i + cpgdim[0]*(j + cpgdim[1]*k);
-                const std::map<int, int>::const_iterator cgit = cartesian_to_compressed.find(cart_grid_indx);
-                if (cgit == cartesian_to_compressed.end()) {
+                const int cell = cartesian_to_compressed[cart_grid_indx];
+
+                if (cell < 0) {
                     OPM_THROW(std::runtime_error, "Cell with i,j,k indices " << i << ' ' << j << ' '
                               << k << " not found in grid (well = " << name() << ')');
                 }
-                const int cell = cgit->second;
 
                 {
                     double radius = 0.5*connection.getDiameter();

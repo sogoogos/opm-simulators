@@ -24,6 +24,7 @@
 #ifndef OPM_BLACKOILWELLMODEL_HEADER_INCLUDED
 #define OPM_BLACKOILWELLMODEL_HEADER_INCLUDED
 
+#include <ebos/eclproblem.hh>
 #include <opm/common/OpmLog/OpmLog.hpp>
 
 #include <opm/common/utility/platform_dependent/disable_warnings.h>
@@ -60,12 +61,18 @@
 
 #include <opm/simulators/WellSwitchingLogger.hpp>
 
+BEGIN_PROPERTIES
+
+NEW_PROP_TAG(EnableTerminalOutput);
+
+END_PROPERTIES
 
 namespace Opm {
 
         /// Class for handling the blackoil well model.
         template<typename TypeTag>
-        class BlackoilWellModel {
+        class BlackoilWellModel : public Ewoms::BaseAuxiliaryModule<TypeTag>
+        {
         public:
             // ---------      Types      ---------
             typedef WellStateFullyImplicitBlackoil WellState;
@@ -77,6 +84,11 @@ namespace Opm {
             typedef typename GET_PROP_TYPE(TypeTag, Indices)             Indices;
             typedef typename GET_PROP_TYPE(TypeTag, Simulator)           Simulator;
             typedef typename GET_PROP_TYPE(TypeTag, Scalar)              Scalar;
+            typedef typename GET_PROP_TYPE(TypeTag, RateVector) RateVector;
+            typedef typename GET_PROP_TYPE(TypeTag, GlobalEqVector) GlobalEqVector;
+            typedef typename GET_PROP_TYPE(TypeTag, JacobianMatrix) JacobianMatrix;
+
+            typedef typename Ewoms::BaseAuxiliaryModule<TypeTag>::NeighborSet NeighborSet;
 
             static const int numEq = Indices::numEq;
             static const int solventSaturationIdx = Indices::solventSaturationIdx;
@@ -101,9 +113,158 @@ namespace Opm {
             using RateConverterType = RateConverter::
                 SurfaceToReservoirVoidage<FluidSystem, std::vector<int> >;
 
-            BlackoilWellModel(Simulator& ebosSimulator,
-                              const ModelParameters& param,
-                              const bool terminal_output);
+            BlackoilWellModel(Simulator& ebosSimulator);
+
+            void init(const Opm::EclipseState& eclState, const Opm::Schedule& schedule)
+            {
+                gravity_ = ebosSimulator_.problem().gravity()[2];
+
+                extractLegacyCellPvtRegionIndex_();
+                extractLegacyDepth_();
+
+                phase_usage_ = phaseUsageFromDeck(eclState);
+
+                const auto& gridView = ebosSimulator_.gridView();
+
+                // calculate the number of elements of the compressed sequential grid. this needs
+                // to be done in two steps because the dune communicator expects a reference as
+                // argument for sum()
+                number_of_cells_ = gridView.size(/*codim=*/0);
+                global_nc_ = gridView.comm().sum(number_of_cells_);
+
+                initial_step_ = true;
+
+                const auto& grid = ebosSimulator_.vanguard().grid();
+                const auto& cartDims = Opm::UgGridHelpers::cartDims(grid);
+                setupCartesianToCompressed_(Opm::UgGridHelpers::globalCell(grid),
+                                            cartDims[0]*cartDims[1]*cartDims[2]);
+
+                // add the eWoms auxiliary module for the wells to the list
+                ebosSimulator_.model().addAuxiliaryModule(this);
+            }
+
+            /////////////
+            // <eWoms auxiliary module stuff>
+            /////////////
+            unsigned numDofs() const
+            // No extra dofs are inserted for wells. (we use a Schur complement.)
+            { return 0; }
+
+            void addNeighbors(std::vector<NeighborSet>& neighbors) const
+            {
+                if (!param_.matrix_add_well_contributions_)
+                    return;
+
+                // Create cartesian to compressed mapping
+                int last_time_step = schedule().getTimeMap().size() - 1;
+                const auto& schedule_wells = schedule().getWells();
+                const auto& cartesianSize = Opm::UgGridHelpers::cartDims(grid());
+
+                // initialize the additional cell connections introduced by wells.
+                for (const auto well : schedule_wells)
+                {
+                    std::vector<int> wellCells;
+                    // All possible connections of the well
+                    const auto& connectionSet = well->getConnections(last_time_step);
+                    wellCells.reserve(connectionSet.size());
+
+                    for ( size_t c=0; c < connectionSet.size(); c++ )
+                    {
+                        const auto& connection = connectionSet.get(c);
+                        int i = connection.getI();
+                        int j = connection.getJ();
+                        int k = connection.getK();
+                        int cart_grid_idx = i + cartesianSize[0]*(j + cartesianSize[1]*k);
+                        int compressed_idx = cartesian_to_compressed_.at(cart_grid_idx);
+
+                        if ( compressed_idx >= 0 ) { // Ignore connections in inactive/remote cells.
+                            wellCells.push_back(compressed_idx);
+                        }
+                    }
+
+                    for (int cellIdx : wellCells)
+                        neighbors[cellIdx].insert(wellCells.begin(),
+                                                  wellCells.end());
+                }
+            }
+
+            void applyInitial()
+            {}
+
+            void linearize(JacobianMatrix& mat , GlobalEqVector& res)
+            {
+                if (!localWellsActive())
+                    return;
+
+                for (const auto& well: well_container_) {
+                    if (param_.matrix_add_well_contributions_)
+                        well->addWellContributions(mat);
+                    well->apply(res);
+                }
+            }
+
+            void postSolve(GlobalEqVector& deltaX)
+            {
+                recoverWellSolutionAndUpdateWellState(deltaX);
+            }
+
+            /////////////
+            // </ eWoms auxiliary module stuff>
+            /////////////
+
+            template <class Restarter>
+            void deserialize(Restarter& res)
+            {
+                // TODO (?)
+            }
+
+            /*!
+             * \brief This method writes the complete state of the well
+             *        to the harddisk.
+             */
+            template <class Restarter>
+            void serialize(Restarter& res)
+            {
+                // TODO (?)
+            }
+
+            void beginEpisode(const Opm::EclipseState& eclState,
+                              const Opm::Schedule& schedule,
+                              bool isRestart)
+            {
+                beginReportStep(ebosSimulator_.episodeIndex());
+            }
+
+            void beginIteration()
+            {
+                assemble(ebosSimulator_.model().newtonMethod().numIterations(),
+                         ebosSimulator_.timeStepSize());
+            }
+
+            template <class Context>
+            void computeTotalRatesForDof(RateVector& rate,
+                                         const Context& context,
+                                         unsigned spaceIdx,
+                                         unsigned timeIdx) const
+            {
+                rate = 0;
+                int elemIdx = context.globalSpaceIndex(spaceIdx, timeIdx);
+                for (const auto& well : well_container_)
+                    well->addCellRates(rate, elemIdx);
+            }
+
+            void endIteration()
+            { }
+
+            void endTimeStep()
+            {
+                timeStepSucceeded(ebosSimulator_.time());
+            }
+
+            void endEpisode()
+            {
+                endReportStep();
+            }
 
             void initFromRestartFile(const RestartValue& restartValues)
             {
@@ -138,6 +299,9 @@ namespace Opm {
                     previous_well_state_ = well_state_;
                 }
             }
+
+            Opm::data::Wells wellData() const
+            { return well_state_.report(phase_usage_, Opm::UgGridHelpers::globalCell(grid())); }
 
             // compute the well fluxes and assemble them in to the reservoir equations as source terms
             // and in the well equations.
@@ -176,7 +340,7 @@ namespace Opm {
             void setRestartWellState(const WellState& well_state);
 
             // called at the beginning of a time step
-            void beginTimeStep(const int timeStepIdx,const double simulationTime);
+            void beginTimeStep();
             // called at the end of a time step
             void timeStepSucceeded(const double& simulationTime);
 
@@ -234,6 +398,9 @@ namespace Opm {
             // a vector of all the wells.
             std::vector<WellInterfacePtr > well_container_;
 
+            // map from logically cartesian cell indices to compressed ones
+            std::vector<int> cartesian_to_compressed_;
+
             using ConvergenceReport = typename WellInterface<TypeTag>::ConvergenceReport;
 
             // create the well container
@@ -283,7 +450,7 @@ namespace Opm {
             // setting the well_solutions_ based on well_state.
             void updatePrimaryVariables();
 
-            void setupCompressedToCartesian(const int* global_cell, int number_of_cells, std::map<int,int>& cartesian_to_compressed ) const;
+            void setupCartesianToCompressed_(const int* global_cell, int number_of_cells);
 
             void computeRepRadiusPerfLength(const Grid& grid);
 

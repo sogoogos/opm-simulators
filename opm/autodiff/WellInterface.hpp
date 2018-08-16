@@ -81,6 +81,7 @@ namespace Opm
         typedef typename GET_PROP_TYPE(TypeTag, Indices) Indices;
         typedef typename GET_PROP_TYPE(TypeTag, IntensiveQuantities) IntensiveQuantities;
         typedef typename GET_PROP_TYPE(TypeTag, MaterialLaw) MaterialLaw;
+        typedef typename GET_PROP_TYPE(TypeTag, RateVector) RateVector;
 
         static const int numEq = Indices::numEq;
         typedef double Scalar;
@@ -120,7 +121,7 @@ namespace Opm
         const int indexOfWell() const;
 
         /// Well cells.
-        const std::vector<int>& cells() {return well_cells_; }
+        const std::vector<int>& cells() const {return well_cells_; }
 
         /// Well type, INJECTOR or PRODUCER.
         WellType wellType() const;
@@ -172,7 +173,7 @@ namespace Opm
 
         virtual void solveEqAndUpdateWellState(WellState& well_state) = 0;
 
-        virtual void assembleWellEq(Simulator& ebosSimulator,
+        virtual void assembleWellEq(const Simulator& ebosSimulator,
                                     const double dt,
                                     WellState& well_state,
                                     bool only_wells) = 0;
@@ -184,7 +185,7 @@ namespace Opm
 
         void setWellEfficiencyFactor(const double efficiency_factor);
 
-        void computeRepRadiusPerfLength(const Grid& grid, const std::map<int, int>& cartesian_to_compressed);
+        void computeRepRadiusPerfLength(const Grid& grid, const std::vector<int>& cartesian_to_compressed);
 
         /// using the solution x to recover the solution xw for wells and applying
         /// xw to update Well State
@@ -224,6 +225,20 @@ namespace Opm
         // Add well contributions to matrix
         virtual void addWellContributions(Mat&) const
         {}
+
+        virtual void addCellRates(RateVector& rates, int cellIdx) const
+        {}
+
+        template <class EvalWell>
+        Eval restrictEval(const EvalWell& in) const
+        {
+            Eval out = 0.0;
+            out.setValue(in.value());
+            for(int eqIdx = 0; eqIdx < numEq;++eqIdx) {
+                out.setDerivative(eqIdx, in.derivative(eqIdx));
+            }
+            return out;
+        }
 
         void solveWellForTesting(Simulator& ebosSimulator, WellState& well_state, const std::vector<double>& B_avg, bool terminal_output);
 

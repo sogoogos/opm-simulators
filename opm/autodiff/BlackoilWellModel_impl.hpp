@@ -4,30 +4,14 @@
 namespace Opm {
     template<typename TypeTag>
     BlackoilWellModel<TypeTag>::
-    BlackoilWellModel(Simulator& ebosSimulator,
-                      const ModelParameters& param,
-                      const bool terminal_output)
+    BlackoilWellModel(Simulator& ebosSimulator)
         : ebosSimulator_(ebosSimulator)
-        , param_(param)
-        , terminal_output_(terminal_output)
         , has_solvent_(GET_PROP_VALUE(TypeTag, EnableSolvent))
         , has_polymer_(GET_PROP_VALUE(TypeTag, EnablePolymer))
     {
-        const auto& eclState = ebosSimulator_.vanguard().eclState();
-        phase_usage_ = phaseUsageFromDeck(eclState);
-
-        const auto& gridView = ebosSimulator_.gridView();
-
-        // calculate the number of elements of the compressed sequential grid. this needs
-        // to be done in two steps because the dune communicator expects a reference as
-        // argument for sum()
-        number_of_cells_ = gridView.size(/*codim=*/0);
-        global_nc_ = gridView.comm().sum(number_of_cells_);
-        gravity_ = ebosSimulator_.problem().gravity()[2];
-
-        extractLegacyCellPvtRegionIndex_();
-        extractLegacyDepth_();
-        initial_step_ = true;
+        terminal_output_ = false;
+        if (ebosSimulator.gridView().comm().rank() == 0)
+            terminal_output_ = EWOMS_GET_PARAM(TypeTag, bool, EnableTerminalOutput);
     }
 
 
@@ -126,15 +110,17 @@ namespace Opm {
     template<typename TypeTag>
     void
     BlackoilWellModel<TypeTag>::
-    beginTimeStep(const int timeStepIdx, const double simulationTime) {
+    beginTimeStep() {
         well_state_ = previous_well_state_;
 
+        const int reportStepIdx = ebosSimulator_.episodeIndex();
+        const double simulationTime = ebosSimulator_.time();
 
         // test wells
-        wellTesting(timeStepIdx, simulationTime);
+        wellTesting(reportStepIdx, simulationTime);
 
         // create the well container
-        well_container_ = createWellContainer(timeStepIdx);
+        well_container_ = createWellContainer(reportStepIdx);
 
         // do the initialization for all the wells
         // TODO: to see whether we can postpone of the intialization of the well containers to
@@ -168,8 +154,8 @@ namespace Opm {
 
     template<typename TypeTag>
     void
-    BlackoilWellModel<TypeTag>::wellTesting(const int timeStepIdx, const double simulationTime) {
-        const auto& wtest_config = schedule().wtestConfig(timeStepIdx);
+    BlackoilWellModel<TypeTag>::wellTesting(const int reportStepIdx, const double simulationTime) {
+        const auto& wtest_config = schedule().wtestConfig(reportStepIdx);
         const auto& wellsForTesting = wellTestState_.updateWell(wtest_config, simulationTime);
 
         // Do the well testing if enabled
@@ -216,11 +202,11 @@ namespace Opm {
                 const int well_cell_top = wells()->well_cells[wells()->well_connpos[wellidx]];
                 const int pvtreg = pvt_region_idx_[well_cell_top];
 
-                if ( !well_ecl->isMultiSegment(timeStepIdx) || !param_.use_multisegment_well_) {
-                    well_container.emplace_back(new StandardWell<TypeTag>(well_ecl, timeStepIdx, wells(),
+                if ( !well_ecl->isMultiSegment(reportStepIdx) || !param_.use_multisegment_well_) {
+                    well_container.emplace_back(new StandardWell<TypeTag>(well_ecl, reportStepIdx, wells(),
                                                                           param_, *rateConverter_, pvtreg, numComponents() ) );
                 } else {
-                    well_container.emplace_back(new MultisegmentWell<TypeTag>(well_ecl, timeStepIdx, wells(),
+                    well_container.emplace_back(new MultisegmentWell<TypeTag>(well_ecl, reportStepIdx, wells(),
                                                                               param_, *rateConverter_, pvtreg, numComponents() ) );
                 }
             }
@@ -260,7 +246,7 @@ namespace Opm {
                     const std::string msg = std::string("well ") + well->name() + std::string(" is re-opened");
                     OpmLog::info(msg);
                     // also reopen completions
-                    for (auto& completion : well->wellEcl()->getCompletions(timeStepIdx)) {
+                    for (auto& completion : well->wellEcl()->getCompletions(reportStepIdx)) {
                         if (!wellTestStateForTheWellTest.hasCompletion(well->name(), completion.first))
                             wellTestState_.dropCompletion(well->name(), completion.first);
                     }
@@ -413,7 +399,7 @@ namespace Opm {
             // basically, this is a more updated state from the solveWellEq based on fixed
             // reservoir state, will tihs be a better place to inialize the explict information?
         }
-        assembleWellEq(dt, false);
+        assembleWellEq(dt, true);
 
         last_report_.converged = true;
     }
@@ -440,7 +426,7 @@ namespace Opm {
     BlackoilWellModel<TypeTag>::
     apply( BVector& r) const
     {
-        if ( ! localWellsActive() ) {
+        if (! localWellsActive() ) {
             return;
         }
 
@@ -1076,16 +1062,17 @@ namespace Opm {
     template<typename TypeTag>
     void
     BlackoilWellModel<TypeTag>::
-    setupCompressedToCartesian(const int* global_cell, int number_of_cells, std::map<int,int>& cartesian_to_compressed ) const
+    setupCartesianToCompressed_(const int* global_cell, int number_of_cartesian_cells)
     {
+        cartesian_to_compressed_.resize(number_of_cartesian_cells, -1);
         if (global_cell) {
-            for (int i = 0; i < number_of_cells; ++i) {
-                cartesian_to_compressed.insert(std::make_pair(global_cell[i], i));
+            for (unsigned i = 0; i < number_of_cells_; ++i) {
+                cartesian_to_compressed_[global_cell[i]] = i;
             }
         }
         else {
-            for (int i = 0; i < number_of_cells; ++i) {
-                cartesian_to_compressed.insert(std::make_pair(i, i));
+            for (unsigned i = 0; i < number_of_cells_; ++i) {
+                cartesian_to_compressed_[i] = i;
             }
         }
 
@@ -1096,16 +1083,8 @@ namespace Opm {
     BlackoilWellModel<TypeTag>::
     computeRepRadiusPerfLength(const Grid& grid)
     {
-        // TODO, the function does not work for parallel running
-        // to be fixed later.
-        const int* global_cell = Opm::UgGridHelpers::globalCell(grid);
-
-        std::map<int,int> cartesian_to_compressed;
-        setupCompressedToCartesian(global_cell, number_of_cells_,
-                                    cartesian_to_compressed);
-
         for (const auto& well : well_container_) {
-            well->computeRepRadiusPerfLength(grid, cartesian_to_compressed);
+            well->computeRepRadiusPerfLength(grid, cartesian_to_compressed_);
         }
     }
 
