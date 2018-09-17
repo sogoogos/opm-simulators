@@ -277,9 +277,6 @@ namespace Opm
             if (!getenv("OMP_NUM_THREADS"))
                 omp_set_num_threads(std::min(2, omp_get_num_procs()));
 #endif
-
-            typedef typename GET_PROP_TYPE(TypeTag, ThreadManager) ThreadManager;
-            ThreadManager::init();
         }
 
         // Extract the minimum priority and determines if log files ought to be created.
