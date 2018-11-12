@@ -139,6 +139,8 @@ namespace Opm
             EWOMS_HIDE_PARAM(TypeTag, MinTimeStepSize);
             EWOMS_HIDE_PARAM(TypeTag, PredeterminedTimeStepsFile);
 
+#if (0)
+#endif
             // flow also does not use the eWoms Newton method
             EWOMS_HIDE_PARAM(TypeTag, NewtonMaxError);
             EWOMS_HIDE_PARAM(TypeTag, NewtonMaxIterations);

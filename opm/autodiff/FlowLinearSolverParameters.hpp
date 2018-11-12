@@ -78,7 +78,6 @@ SET_TYPE_PROP(FlowIstlSolverParams, LinearSolverBackend, Opm::ISTLSolverEbos<Typ
 SET_BOOL_PROP(FlowIstlSolverParams, PreconditionerAddWellContributions, false);
 
 
-
 END_PROPERTIES
 
 namespace Opm
