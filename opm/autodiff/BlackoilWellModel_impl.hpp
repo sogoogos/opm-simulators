@@ -106,7 +106,7 @@ namespace Opm {
         /*
         for (const auto& well: well_container_) {
             if (param_.matrix_add_well_contributions_)
-                well->addWellContributions(mat);
+                well->addWellContributions(mat.istlMatrix());
 
             // applying the well residual to reservoir residuals
             // r = r - duneC_^T * invDuneD_ * resWell_

@@ -131,6 +131,7 @@ public:
     /// \return                    simulation report, with timing data
     SimulatorReport run(SimulatorTimer& timer)
     {
+#if 0
         failureReport_ = SimulatorReport();
 
         // handle restarts
@@ -215,9 +216,6 @@ public:
             // Run a multiple steps of the solver depending on the time step control.
             solverTimer.start();
 
-            auto solver = createSolver(wellModel_());
-
-            solver->model().beginReportStep(firstRestartStep);
             firstRestartStep = false;
 
             if (terminalOutput_) {
@@ -307,6 +305,11 @@ public:
         report.converged = true;
 
         return report;
+#else
+        SimulatorReport report;
+        return report;
+#endif
+
     }
 
     /** \brief Returns the simulator report for the failed substeps of the simulation.

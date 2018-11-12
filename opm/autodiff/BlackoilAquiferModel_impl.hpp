@@ -106,6 +106,22 @@ namespace Opm {
   BlackoilAquiferModel<TypeTag>::endEpisode()
   { }
 
+    template <typename TypeTag>
+    template <class Restarter>
+    void
+    BlackoilAquiferModel<TypeTag>::serialize(Restarter& res)
+    {
+        // TODO (?)
+    }
+
+    template<typename TypeTag>
+    template <class Restarter>
+    void
+    BlackoilAquiferModel<TypeTag>::deserialize(Restarter& res)
+    {
+        // TODO (?)
+    }
+
   // Initialize the aquifers in the deck
   template<typename TypeTag>
   void

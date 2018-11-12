@@ -506,10 +506,6 @@ namespace Opm {
             ebosSimulator.problem().beginTimeStep();
         }
 
-        SimulatorReport prepareSubStepReport_() {
-
-        }
-
 
 
         template <class StepReportVector>
