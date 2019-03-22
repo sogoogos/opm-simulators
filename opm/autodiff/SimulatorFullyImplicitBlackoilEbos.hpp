@@ -228,7 +228,7 @@ public:
                 ebosSimulator_.setTimeStepSize(0.0);
 
                 wellModel_().beginReportStep(timer.currentStepNum());
-                ebosSimulator_.problem().writeOutput(false);
+                ebosSimulator_.problem().writeOutput();
 
                 report.output_write_time += perfTimer.stop();
             }

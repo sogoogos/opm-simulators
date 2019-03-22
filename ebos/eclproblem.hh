@@ -960,14 +960,14 @@ public:
      * \brief Write the requested quantities of the current solution into the output
      *        files.
      */
-    void writeOutput(bool isSubStep, bool verbose = true)
+    void writeOutput(bool verbose = true)
     {
         // use the generic code to prepare the output fields and to
         // write the desired VTK files.
-        ParentType::writeOutput(isSubStep, verbose);
+        ParentType::writeOutput(verbose);
 
         if (enableEclOutput_)
-            eclWriter_->writeOutput(isSubStep);
+            eclWriter_->writeOutput(/*isSubStep=*/!this->simulator().episodeWillBeOver());
     }
 
     /*!
