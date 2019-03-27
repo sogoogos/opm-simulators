@@ -95,6 +95,10 @@ namespace Opm
                 Base::cellToConnectionIdx_.resize(Base::ebos_simulator_.gridView().size(/*codim=*/0), -1);
                 for (size_t idx = 0; idx < Base::cell_idx_.size(); ++idx)
                 {
+                    if (Base::cartesian_to_compressed_.count(Base::cell_idx_[idx]) == 0) {
+                        // cell specified by aquifer is inactive
+                        continue;
+                    }
                     const int cell_index = Base::cartesian_to_compressed_.at(Base::cell_idx_[idx]);
                     Base::cellToConnectionIdx_[cell_index] = idx;
 
