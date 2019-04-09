@@ -119,6 +119,7 @@ class EclTransExtensiveQuantities
     enum { numPhases = FluidSystem::numPhases };
     enum { enableSolvent = GET_PROP_VALUE(TypeTag, EnableSolvent) };
     enum { enableEnergy = GET_PROP_VALUE(TypeTag, EnableEnergy) };
+    enum { enableExperiments = GET_PROP_VALUE(TypeTag, EnableExperiments) };
 
     typedef Opm::MathToolbox<Evaluation> Toolbox;
     typedef Dune::FieldVector<Scalar, dimWorld> DimVector;
@@ -343,13 +344,18 @@ protected:
             // does not matter, though.
             unsigned upstreamIdx = upstreamIndex_(phaseIdx);
             const auto& up = elemCtx.intensiveQuantities(upstreamIdx, timeIdx);
-            const Evaluation transModified = trans*problem.getTransmissibiltyMultiplier(up.fluidState().pressure(FluidSystem::oilPhaseIdx), timeIdx, stencil.globalSpaceIndex(upstreamIdx));
+
+            // TODO: should the rock compaction transmissibility multiplier be upstreamed
+            // or averaged? all fluids should see the same compaction?!
+            const Evaluation& transMult =
+                problem.template rockCompTransMultiplier<Evaluation>(up, stencil.globalSpaceIndex(upstreamIdx));
+
             if (upstreamIdx == interiorDofIdx_)
                 volumeFlux_[phaseIdx] =
-                    pressureDifference_[phaseIdx]*up.mobility(phaseIdx)*(-transModified/faceArea);
+                    pressureDifference_[phaseIdx]*up.mobility(phaseIdx)*transMult*(-trans/faceArea);
             else
                 volumeFlux_[phaseIdx] =
-                    pressureDifference_[phaseIdx]*(Toolbox::value(up.mobility(phaseIdx))*(-transModified/faceArea));
+                    pressureDifference_[phaseIdx]*(Toolbox::value(up.mobility(phaseIdx))*Toolbox::value(transMult)*(-trans/faceArea));
         }
     }
 
@@ -429,14 +435,19 @@ protected:
             // does not matter, though.
             unsigned upstreamIdx = upstreamIndex_(phaseIdx);
             const auto& up = elemCtx.intensiveQuantities(upstreamIdx, timeIdx);
-            const Evaluation transModified = trans*problem.getTransmissibiltyMultiplier(up.fluidState().pressure(FluidSystem::oilPhaseIdx), /*timeIdx=*/0, stencil.globalSpaceIndex(upstreamIdx));
+
+            Evaluation transModified = trans;
+            if (enableExperiments) {
+                // deal with water induced rock compaction
+                transModified *= problem.template rockCompTransMultiplier<double>(up, stencil.globalSpaceIndex(upstreamIdx));
+            }
+
             if (upstreamIdx == interiorDofIdx_) {
                 volumeFlux_[phaseIdx] =
                     pressureDifference_[phaseIdx]*up.mobility(phaseIdx)*(-transModified/faceArea);
 
-                if (enableSolvent && phaseIdx == gasPhaseIdx) {
-                        asImp_().setSolventVolumeFlux( pressureDifference_[phaseIdx]*up.solventMobility()*(-transModified/faceArea));
-                }
+                if (enableSolvent && phaseIdx == gasPhaseIdx)
+                    asImp_().setSolventVolumeFlux( pressureDifference_[phaseIdx]*up.solventMobility()*(-transModified/faceArea));
             }
             else {
                 // compute the phase mobility using the material law parameters of the
@@ -453,9 +464,8 @@ protected:
                     pressureDifference_[phaseIdx]*mob*(-transModified/faceArea);
 
                 // Solvent inflow is not yet supported
-                if (enableSolvent && phaseIdx == gasPhaseIdx) {
-                    asImp_().setSolventVolumeFlux( 0.0 );
-                }
+                if (enableSolvent && phaseIdx == gasPhaseIdx)
+                    asImp_().setSolventVolumeFlux(0.0);
             }
         }
     }
