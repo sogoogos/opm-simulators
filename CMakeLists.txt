@@ -23,7 +23,7 @@ option(SIBLING_SEARCH "Search for other modules in sibling directories?" ON)
 set( USE_OPENMP_DEFAULT OFF ) # Use of OpenMP is considered experimental
 option(BUILD_FLOW "Build the production oriented flow simulator?" ON)
 option(BUILD_EBOS "Build the research oriented ebos simulator?" ON)
-option(BUILD_EBOS_EXTENSIONS "Build the variants for various extensions of ebos by default?" OFF)
+option(BUILD_EBOS_EXTENSIONS "Build the variants for various extensions of ebos by default?" ON)
 option(BUILD_EBOS_DEBUG_EXTENSIONS "Build the ebos variants which are purely for debugging by default?" OFF)
 
 if(SIBLING_SEARCH AND NOT opm-common_DIR)
